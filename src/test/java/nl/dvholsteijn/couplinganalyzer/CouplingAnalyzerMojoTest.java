@@ -52,13 +52,19 @@ class CouplingAnalyzerMojoTest {
         // When: Executing the mojo
         mojo.execute();
 
-        // Then: Output directory and report should be created
+        // Then: Output directory and reports should be created
         assertTrue(outputDir.toFile().exists());
         assertTrue(outputDir.resolve("coupling-report.txt").toFile().exists());
+        assertTrue(outputDir.resolve("coupling-graph.json").toFile().exists());
 
         String reportContent = Files.readString(outputDir.resolve("coupling-report.txt"));
         assertTrue(reportContent.contains("test-project"));
         assertTrue(reportContent.contains("1.0.0-SNAPSHOT"));
+        assertTrue(reportContent.contains("Summary"));
+
+        String jsonContent = Files.readString(outputDir.resolve("coupling-graph.json"));
+        assertTrue(jsonContent.contains("test-project"));
+        assertTrue(jsonContent.contains("\"classes\""));
     }
 
     @Test
@@ -136,8 +142,15 @@ class CouplingAnalyzerMojoTest {
             () -> assertTrue(content.contains("Coupling Analysis Report")),
             () -> assertTrue(content.contains("test-project")),
             () -> assertTrue(content.contains("1.0.0-SNAPSHOT")),
-            () -> assertTrue(content.contains("Analysis framework initialized successfully"))
+            () -> assertTrue(content.contains("Summary")),
+            () -> assertTrue(content.contains("Total Classes:"))
         );
+
+        // Then: JSON report should also be generated
+        Path jsonPath = outputDir.resolve("coupling-graph.json");
+        assertTrue(Files.exists(jsonPath));
+        String jsonContent = Files.readString(jsonPath);
+        assertTrue(jsonContent.contains("projectName"));
     }
 }
 

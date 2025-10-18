@@ -1,5 +1,10 @@
 package nl.dvholsteijn.couplinganalyzer;
 
+import nl.dvholsteijn.couplinganalyzer.export.JsonGraphExporter;
+import nl.dvholsteijn.couplinganalyzer.graph.GraphBuilder;
+import nl.dvholsteijn.couplinganalyzer.model.CouplingGraph;
+import nl.dvholsteijn.couplinganalyzer.parser.JavaParserImpl;
+import nl.dvholsteijn.couplinganalyzer.parser.JavaSourceParser;
 import org.apache.maven.plugin.AbstractMojo;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugin.MojoFailureException;
@@ -12,6 +17,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 /**
  * Analyzes coupling and cohesion in a Maven project.
@@ -37,6 +43,24 @@ public class CouplingAnalyzerMojo extends AbstractMojo {
     @Parameter(defaultValue = "${project.build.sourceDirectory}", property = "coupling.sourceDirectory")
     private File sourceDirectory;
 
+    /**
+     * Output format for the analysis report.
+     */
+    @Parameter(defaultValue = "BOTH", property = "coupling.outputFormat")
+    private String outputFormat;
+
+    /**
+     * Whether to include detailed metrics in the output.
+     */
+    @Parameter(defaultValue = "true", property = "coupling.includeMetrics")
+    private boolean includeMetrics;
+
+    /**
+     * Packages to exclude from analysis.
+     */
+    @Parameter(property = "coupling.excludePackages")
+    private List<String> excludePackages;
+
     @Override
     public void execute() throws MojoExecutionException, MojoFailureException {
         getLog().info("Starting Coupling Analyzer...");
@@ -45,8 +69,18 @@ public class CouplingAnalyzerMojo extends AbstractMojo {
 
         validateSourceDirectory();
         createOutputDirectory();
-        generateReport();
 
+        CouplingGraph graph = analyzeProject();
+
+        if (shouldGenerateJson()) {
+            generateJsonReport(graph);
+        }
+
+        if (shouldGenerateText()) {
+            generateTextReport(graph);
+        }
+
+        logSummary(graph);
         getLog().info("Coupling analysis completed successfully!");
     }
 
@@ -77,25 +111,115 @@ public class CouplingAnalyzerMojo extends AbstractMojo {
         getLog().info("Output directory: " + outputDirectory.getAbsolutePath());
     }
 
-    private void generateReport() throws MojoExecutionException {
+    private CouplingGraph analyzeProject() throws MojoExecutionException {
+        try {
+            getLog().info("Parsing Java source files...");
+
+            JavaSourceParser parser = new JavaParserImpl();
+            GraphBuilder builder = new GraphBuilder(parser);
+
+            CouplingGraph graph = builder.buildGraph(
+                project.getName(),
+                project.getVersion(),
+                sourceDirectory
+            );
+
+            getLog().info("Found " + graph.getClasses().size() + " classes, " +
+                         graph.getDependencies().size() + " dependencies");
+
+            return graph;
+        } catch (IOException e) {
+            throw new MojoExecutionException("Failed to analyze project", e);
+        }
+    }
+
+    private void generateJsonReport(CouplingGraph graph) throws MojoExecutionException {
+        Path jsonPath = outputDirectory.toPath().resolve("coupling-graph.json");
+
+        try {
+            JsonGraphExporter exporter = new JsonGraphExporter();
+            exporter.export(graph, jsonPath.toFile());
+            getLog().info("JSON report generated: " + jsonPath.toAbsolutePath());
+        } catch (IOException e) {
+            throw new MojoExecutionException("Failed to write JSON report", e);
+        }
+    }
+
+    private void generateTextReport(CouplingGraph graph) throws MojoExecutionException {
         Path reportPath = outputDirectory.toPath().resolve("coupling-report.txt");
 
         try {
             StringBuilder report = new StringBuilder();
             report.append("Coupling Analysis Report\n");
             report.append("========================\n\n");
-            report.append("Project: ").append(project.getName()).append("\n");
-            report.append("Version: ").append(project.getVersion()).append("\n");
-            report.append("Source Directory: ").append(sourceDirectory.getAbsolutePath()).append("\n");
+            report.append("Project: ").append(graph.getProjectName()).append("\n");
+            report.append("Version: ").append(graph.getVersion()).append("\n");
+            report.append("Generated: ").append(graph.getGeneratedAt()).append("\n");
+            report.append("Source Directory: ").append(graph.getSourceDirectory()).append("\n");
             report.append("\n");
-            report.append("Status: Analysis framework initialized successfully.\n");
-            report.append("Note: Detailed coupling analysis will be implemented in future iterations.\n");
+
+            if (graph.getMetrics() != null) {
+                report.append("Summary\n");
+                report.append("-------\n");
+                report.append("Total Classes: ").append(graph.getMetrics().getTotalClasses()).append("\n");
+                report.append("Total Dependencies: ").append(graph.getMetrics().getTotalDependencies()).append("\n");
+                report.append("Average Dependencies per Class: ")
+                      .append(String.format("%.2f", graph.getMetrics().getAverageDependenciesPerClass()))
+                      .append("\n\n");
+
+                if (!graph.getMetrics().getMostCoupledClasses().isEmpty()) {
+                    report.append("Most Coupled Classes\n");
+                    report.append("--------------------\n");
+                    graph.getMetrics().getMostCoupledClasses().forEach((className, count) ->
+                        report.append("  - ").append(className).append(" (").append(count).append(" dependencies)\n")
+                    );
+                    report.append("\n");
+                }
+
+                if (!graph.getMetrics().getCircularDependencies().isEmpty()) {
+                    report.append("Circular Dependencies Detected: ")
+                          .append(graph.getMetrics().getCircularDependencies().size()).append("\n");
+                    report.append("-------------------------------\n");
+                    for (List<String> cycle : graph.getMetrics().getCircularDependencies()) {
+                        report.append("  ").append(String.join(" -> ", cycle)).append("\n");
+                    }
+                }
+            }
 
             Files.writeString(reportPath, report.toString());
-            getLog().info("Report generated: " + reportPath.toAbsolutePath());
+            getLog().info("Text report generated: " + reportPath.toAbsolutePath());
         } catch (IOException e) {
-            throw new MojoExecutionException("Failed to write report", e);
+            throw new MojoExecutionException("Failed to write text report", e);
         }
+    }
+
+    private void logSummary(CouplingGraph graph) {
+        if (graph.getMetrics() != null) {
+            getLog().info("Analysis Summary:");
+            getLog().info("  Total Classes: " + graph.getMetrics().getTotalClasses());
+            getLog().info("  Total Dependencies: " + graph.getMetrics().getTotalDependencies());
+
+            if (!graph.getMetrics().getMostCoupledClasses().isEmpty()) {
+                getLog().info("  Most coupled classes:");
+                graph.getMetrics().getMostCoupledClasses().entrySet().stream()
+                    .limit(3)
+                    .forEach(entry -> getLog().info("    - " + entry.getKey() + " (" + entry.getValue() + " dependencies)"));
+            }
+
+            if (!graph.getMetrics().getCircularDependencies().isEmpty()) {
+                getLog().warn("  Circular dependencies detected: " + graph.getMetrics().getCircularDependencies().size());
+            }
+        }
+    }
+
+    private boolean shouldGenerateJson() {
+        String format = outputFormat != null ? outputFormat : "BOTH";
+        return "JSON".equalsIgnoreCase(format) || "BOTH".equalsIgnoreCase(format);
+    }
+
+    private boolean shouldGenerateText() {
+        String format = outputFormat != null ? outputFormat : "BOTH";
+        return "TEXT".equalsIgnoreCase(format) || "BOTH".equalsIgnoreCase(format);
     }
 
     // Getters for testing

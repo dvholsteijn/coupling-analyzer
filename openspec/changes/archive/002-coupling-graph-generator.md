@@ -1,7 +1,8 @@
 # Proposal: Coupling Graph Generator for AI Analysis
 
-**Status**: Proposed  
+**Status**: Approved  
 **Created**: 2025-10-18  
+**Approved**: 2025-10-18  
 **Type**: Feature
 
 ## Summary
